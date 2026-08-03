@@ -36,7 +36,8 @@ spec:
                   key: POSTGRES_DB
           volumeMounts:
             - name: postgres-data
-              mountPath: /var/lib/postgresql
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata
           readinessProbe:
             exec:
               command:

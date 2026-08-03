@@ -2,6 +2,10 @@
 
 Manifests for deploying TaskBoard (Postgres, API, frontend, Ingress) into a `taskboard` namespace.
 
+Related repos: [taskboard-api](https://github.com/FinnTheHero/taskboard-api) · [taskboard-front](https://github.com/FinnTheHero/taskboard-front)
+
+> Build the app images from sibling clone directories (`../taskboard-api`, `../taskboard-front`) or adjust the paths below.
+
 ## Architecture
 
 ```mermaid
@@ -69,8 +73,8 @@ flowchart LR
 2. Build images (OrbStack shares the Docker daemon with Kubernetes):
 
    ```bash
-   docker build -t taskboard-api:local ./taskboard-api
-   docker build -t taskboard-front:local --build-arg VITE_API_URL=/api ./taskboard-front
+   docker build -t taskboard-api:local ../taskboard-api
+   docker build -t taskboard-front:local --build-arg VITE_API_URL=/api ../taskboard-front
    ```
 
 3. Copy secrets if needed (dev values are already in `01-secrets.yaml`):
@@ -104,24 +108,30 @@ kubectl logs -f deployment/postgres -n taskboard
 kubectl get ingress -n taskboard
 ```
 
-## k3s (multi-node)
+## Any Kubernetes cluster
 
-Same YAML, with these differences:
+Same manifests work on a standard Kubernetes cluster (kind, minikube, cloud, etc.). Differences from local OrbStack:
 
-1. **Images** — push to a registry and update `06-backend-deployment.yaml` / `08-frontend-deployment.yaml`:
+1. **Images** — nodes cannot see images you only built on your laptop. Push to a registry, then point the Deployments at those tags:
 
    ```bash
-   docker build -t ghcr.io/<your-user>/taskboard-api:latest ./taskboard-api
-   docker build -t ghcr.io/<your-user>/taskboard-front:latest --build-arg VITE_API_URL=/api ./taskboard-front
+   docker build -t ghcr.io/<your-user>/taskboard-api:latest ../taskboard-api
+   docker build -t ghcr.io/<your-user>/taskboard-front:latest --build-arg VITE_API_URL=/api ../taskboard-front
    docker push ghcr.io/<your-user>/taskboard-api:latest
    docker push ghcr.io/<your-user>/taskboard-front:latest
    ```
 
-   Set `imagePullPolicy: Always` and add `imagePullSecrets` if the registry is private.
+   In `06-backend-deployment.yaml` and `08-frontend-deployment.yaml`, set the image names above, `imagePullPolicy: Always`, and add `imagePullSecrets` if the registry is private.
 
-2. **Ingress host** — update `taskboard.local` in `10-ingress.yaml` and `CORS_ORIGIN` in `02-configmap.yaml`.
+2. **Ingress** — ensure an Ingress controller is installed (e.g. ingress-nginx). Update the host in `10-ingress.yaml` and `CORS_ORIGIN` in `02-configmap.yaml` to your real hostname or load-balancer URL.
 
-3. **Storage** — k3s provides `local-path` by default (`kubectl get sc`).
+3. **Storage** — the PVC uses the cluster default StorageClass. Check what is available:
+
+   ```bash
+   kubectl get sc
+   ```
+
+   If there is no default, set `spec.storageClassName` on `03-postgres-pvc.yaml` to a class that supports `ReadWriteOnce`.
 
 ## Secrets
 
@@ -143,7 +153,7 @@ Same YAML, with these differences:
 | Backend exits immediately | Missing or wrong `DATABASE_URL` / `JWT_SECRET` |
 | Frontend loads but API fails (405) | Hit frontend Service directly; use Ingress so `/api` reaches backend |
 | Frontend calls wrong API | Rebuild after changing `VITE_API_URL` (build-time) |
-| `ImagePullBackOff` on k3s | Push images to a registry or load on each node |
+| `ImagePullBackOff` | Image only exists locally; push to a registry (or load into the cluster) and update Deployment image names |
 | Postgres empty after delete | PVC was deleted; data lives on the PVC |
 
 ## Tear down

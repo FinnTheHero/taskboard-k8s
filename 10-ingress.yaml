@@ -5,7 +5,7 @@ metadata:
   namespace: taskboard
 spec:
   rules:
-    # Hostless rule: works with OrbStack ingress IP without /etc/hosts
+    # Hostless rule: works via Ingress controller IP/LB without /etc/hosts
     - http:
         paths:
           - path: /api
