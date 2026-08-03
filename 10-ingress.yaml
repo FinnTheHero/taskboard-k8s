@@ -2,7 +2,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: taskboard
-  namespace: production
+  namespace: taskboard
 spec:
   rules:
     # Hostless rule: works with OrbStack ingress IP without /etc/hosts

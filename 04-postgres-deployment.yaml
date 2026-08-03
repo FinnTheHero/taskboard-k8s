@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: postgres
-  namespace: production
+  namespace: taskboard
 spec:
   replicas: 1
   selector:

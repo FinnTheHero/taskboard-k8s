@@ -1,50 +1,64 @@
-# TaskBoard Kubernetes manifests
+# TaskBoard Kubernetes
 
-Numbered manifests deploy the full stack: Postgres, API, frontend, and Ingress.
+Manifests for deploying TaskBoard (Postgres, API, frontend, Ingress) into a `taskboard` namespace.
 
 ## Architecture
 
-```
-Browser → Ingress (taskboard.local)
-            ├─ /api  → backend Service :4000 → API pod
-            └─ /     → frontend Service :80  → nginx + SPA
-                              backend pod → postgres Service :5432 → Postgres pod + PVC
+```mermaid
+flowchart LR
+  Browser([Browser])
+
+  subgraph cluster["Namespace: taskboard"]
+    Ingress["Ingress<br/>taskboard.local<br/>/ and /api"]
+
+    FrontendSvc["Service<br/>frontend :80"]
+    BackendSvc["Service<br/>backend :4000"]
+    PostgresSvc["Service<br/>postgres :5432"]
+
+    FrontendPod["Deployment<br/>frontend<br/>nginx + SPA"]
+    BackendPod["Deployment<br/>backend<br/>API"]
+    PostgresPod["Deployment<br/>postgres<br/>postgres:16"]
+
+    PVC[("PVC<br/>postgres-data<br/>1Gi")]
+    Secret[("Secret<br/>taskboard-secrets")]
+    ConfigMap[("ConfigMap<br/>backend-config")]
+  end
+
+  Browser --> Ingress
+  Ingress -->|"/"| FrontendSvc
+  Ingress -->|"/api"| BackendSvc
+  FrontendSvc --> FrontendPod
+  BackendSvc --> BackendPod
+  BackendPod --> PostgresSvc
+  PostgresSvc --> PostgresPod
+  PostgresPod --> PVC
+  Secret -.-> BackendPod
+  Secret -.-> PostgresPod
+  ConfigMap -.-> BackendPod
 ```
 
-## Apply order
-
-Files are numbered so you can read and apply them in dependency order:
+**Request flow:** Browser → Ingress → frontend (`/`) or backend (`/api`) → Postgres.
 
 | File | Kind | Purpose |
 |------|------|---------|
-| `00-namespace.yaml` | Namespace | Isolates all TaskBoard resources in `production` |
+| `00-namespace.yaml` | Namespace | Isolates resources in `taskboard` |
 | `01-secrets.yaml` | Secret | DB credentials, `DATABASE_URL`, `JWT_SECRET` |
-| `02-configmap.yaml` | ConfigMap | Non-secret backend config (`NODE_ENV`, `CORS_ORIGIN`, etc.) |
-| `03-postgres-pvc.yaml` | PersistentVolumeClaim | Requests 1Gi disk for Postgres data |
-| `04-postgres-deployment.yaml` | Deployment | Runs one Postgres pod with probes and volume mount |
-| `05-postgres-service.yaml` | Service | Stable DNS `postgres:5432` inside the cluster |
-| `06-backend-deployment.yaml` | Deployment | API pod; init container waits for Postgres |
-| `07-backend-service.yaml` | Service | Exposes API on port 4000 inside the cluster |
-| `08-frontend-deployment.yaml` | Deployment | nginx serving the built React SPA |
-| `09-frontend-service.yaml` | Service | Exposes frontend on port 80 inside the cluster |
-| `10-ingress.yaml` | Ingress | Routes external HTTP to frontend and backend |
-
-### What each resource type does
-
-- **Namespace** — logical boundary; `kubectl get all -n production` shows only this app.
-- **Secret** — sensitive values (passwords, tokens). Injected as env vars into pods.
-- **ConfigMap** — non-sensitive config. Changing it does not restart pods until you roll the Deployment.
-- **PVC** — asks the cluster for persistent disk. Postgres data survives pod restarts.
-- **Deployment** — desired state for pods (image, env, probes). ReplicaSet is created automatically.
-- **Service** — stable cluster IP + DNS for a set of pods. `ClusterIP` = internal only.
-- **Ingress** — maps host/path from outside the cluster to Services.
+| `02-configmap.yaml` | ConfigMap | Non-secret backend config |
+| `03-postgres-pvc.yaml` | PersistentVolumeClaim | 1Gi disk for Postgres data |
+| `04-postgres-deployment.yaml` | Deployment | Postgres pod with probes + volume |
+| `05-postgres-service.yaml` | Service | Cluster DNS `postgres:5432` |
+| `06-backend-deployment.yaml` | Deployment | API; init container waits for DB |
+| `07-backend-service.yaml` | Service | Exposes API on port 4000 |
+| `08-frontend-deployment.yaml` | Deployment | nginx serving the React SPA |
+| `09-frontend-service.yaml` | Service | Exposes frontend on port 80 |
+| `10-ingress.yaml` | Ingress | Routes external HTTP to services |
 
 ## Prerequisites
 
 - `kubectl` configured for your cluster
 - Docker (for building images)
 
-## OrbStack (local, single node)
+## OrbStack (local)
 
 1. Enable Kubernetes in OrbStack and verify:
 
@@ -62,41 +76,39 @@ Files are numbered so you can read and apply them in dependency order:
 3. Copy secrets if needed (dev values are already in `01-secrets.yaml`):
 
    ```bash
-   cp k8s/secrets.example.yaml k8s/01-secrets.yaml
+   cp secrets.example.yaml 01-secrets.yaml
    # edit passwords and JWT_SECRET
    ```
 
 4. Apply manifests:
 
    ```bash
-   kubectl apply -f k8s/
+   kubectl apply -f .
    ```
 
 5. Watch rollout:
 
    ```bash
-   kubectl get pods -n production -w
+   kubectl get pods -n taskboard -w
    ```
 
-6. Open the app using the OrbStack service address (e.g. `http://192.168.x.x` from `kubectl get svc -n production frontend`). Frontend nginx proxies `/api` to the backend automatically.
+6. Open via Ingress IP (`kubectl get ingress -n taskboard`) or add `127.0.0.1 taskboard.local` to `/etc/hosts`.
 
-   Optional: add `127.0.0.1 taskboard.local` to `/etc/hosts` if you use Ingress with that hostname.
-
-### Debug commands
+### Debug
 
 ```bash
-kubectl get all -n production
-kubectl describe pod -n production -l app=backend
-kubectl logs -f deployment/backend -n production
-kubectl logs -f deployment/postgres -n production
-kubectl get ingress -n production
+kubectl get all -n taskboard
+kubectl describe pod -n taskboard -l app=backend
+kubectl logs -f deployment/backend -n taskboard
+kubectl logs -f deployment/postgres -n taskboard
+kubectl get ingress -n taskboard
 ```
 
-## k3s (multi-node cluster)
+## k3s (multi-node)
 
-Use the same YAML. Differences:
+Same YAML, with these differences:
 
-1. **Images** — build locally, push to a registry (e.g. GHCR), then update image names in `06-backend-deployment.yaml` and `08-frontend-deployment.yaml`:
+1. **Images** — push to a registry and update `06-backend-deployment.yaml` / `08-frontend-deployment.yaml`:
 
    ```bash
    docker build -t ghcr.io/<your-user>/taskboard-api:latest ./taskboard-api
@@ -107,46 +119,36 @@ Use the same YAML. Differences:
 
    Set `imagePullPolicy: Always` and add `imagePullSecrets` if the registry is private.
 
-2. **Ingress host** — change `taskboard.local` in `10-ingress.yaml` and `CORS_ORIGIN` in `02-configmap.yaml` to your domain or node IP. Add a matching `/etc/hosts` entry pointing at any node IP.
+2. **Ingress host** — update `taskboard.local` in `10-ingress.yaml` and `CORS_ORIGIN` in `02-configmap.yaml`.
 
-3. **Storage** — k3s provides `local-path` StorageClass by default. Verify with `kubectl get sc`.
-
-4. **Workers** — no extra config needed; the scheduler places pods on workers. Postgres PVC binds to the node where its pod runs.
+3. **Storage** — k3s provides `local-path` by default (`kubectl get sc`).
 
 ## Secrets
 
-- `secrets.example.yaml` — template with placeholders (safe to commit).
-- `01-secrets.yaml` — dev defaults for local learning. For real deployments, use strong passwords and avoid committing production secrets.
-
-Required secret keys:
-
 | Key | Used by |
 |-----|---------|
-| `POSTGRES_USER` | Postgres Deployment |
-| `POSTGRES_PASSWORD` | Postgres Deployment |
-| `POSTGRES_DB` | Postgres Deployment |
-| `DATABASE_URL` | Backend Deployment |
-| `JWT_SECRET` | Backend Deployment (min 16 characters) |
+| `POSTGRES_USER` | Postgres |
+| `POSTGRES_PASSWORD` | Postgres |
+| `POSTGRES_DB` | Postgres |
+| `DATABASE_URL` | Backend |
+| `JWT_SECRET` | Backend (min 16 characters) |
+
+- `secrets.example.yaml` — template with placeholders (safe to commit)
+- `01-secrets.yaml` — local dev defaults; do not commit production secrets
 
 ## Common issues
 
 | Symptom | Likely cause |
-|---------|----------------|
-| `db-deployment` / invalid Deployment | Old stub file; use `04-postgres-deployment.yaml` |
+|---------|--------------|
 | Backend exits immediately | Missing or wrong `DATABASE_URL` / `JWT_SECRET` |
-| Frontend loads but register/login fails (405) | You hit the frontend Service directly; `/api` must be proxied to backend (see `nginx.conf`) or accessed via Ingress |
-| Frontend calls wrong API | Rebuild frontend image after changing `VITE_API_URL` (build-time, not runtime) |
-| `ImagePullBackOff` on k3s | Push images to a registry or load them on each node |
-| Postgres empty after delete | PVC was deleted; data lives on the PVC, not the Deployment |
+| Frontend loads but API fails (405) | Hit frontend Service directly; use Ingress so `/api` reaches backend |
+| Frontend calls wrong API | Rebuild after changing `VITE_API_URL` (build-time) |
+| `ImagePullBackOff` on k3s | Push images to a registry or load on each node |
+| Postgres empty after delete | PVC was deleted; data lives on the PVC |
 
 ## Tear down
 
 ```bash
-kubectl delete -f k8s/
-```
-
-To also remove persisted database data:
-
-```bash
-kubectl delete pvc postgres-data -n production
+kubectl delete -f .
+kubectl delete pvc postgres-data -n taskboard   # also wipe DB data
 ```
