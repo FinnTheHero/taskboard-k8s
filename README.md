@@ -116,7 +116,24 @@ kubectl get all -n taskboard
    kubectl get pods -n taskboard -w
    ```
 
-   Expect: `postgres` Running → backend leaves `Init:0/1` → all three `1/1 Running`.
+   Expect: `postgres` Running → backend leaves `Init:0/1` → API/frontend/`cloudflared` as configured.
+
+## Seed the database
+
+The backend startup command runs **`prisma migrate deploy`** only (schema). It does **not** seed demo data.
+
+After Postgres and the API are `Running`, load Alice/Bob, demo groups, and sample boards:
+
+```bash
+kubectl -n taskboard exec deploy/backend -- pnpm db:seed
+```
+
+| User  | Email            | Password   | Notes |
+|-------|------------------|------------|-------|
+| Alice | `alice@demo.com` | `demo1234` | MANAGER in Acme Corp (`100001`) |
+| Bob   | `bob@demo.com`   | `demo1234` | Not pre-joined — use a join code |
+
+Safe to re-run only if your seed is idempotent; otherwise seed once on a fresh database. You can also skip seeding and register new users through the UI.
 
 ## Verify without Ingress (port-forward)
 
