@@ -26,8 +26,8 @@ spec:
               done
       containers:
         - name: backend
-          image: taskboard-api:local
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/finnthehero/taskboard-api:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 4000
           envFrom:

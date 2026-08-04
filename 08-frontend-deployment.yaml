@@ -15,8 +15,8 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: taskboard-front:local
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/finnthehero/taskboard-front:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 80
           readinessProbe:

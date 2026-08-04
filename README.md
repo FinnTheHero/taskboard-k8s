@@ -4,7 +4,10 @@ Manifests for deploying TaskBoard (Postgres, API, frontend, Ingress) into a `tas
 
 Related repos: [taskboard-api](https://github.com/FinnTheHero/taskboard-api) · [taskboard-front](https://github.com/FinnTheHero/taskboard-front)
 
-> Build the app images from sibling clone directories (`../taskboard-api`, `../taskboard-front`) or adjust the paths below.
+App images are public on GHCR (no pull secret required):
+
+- `ghcr.io/finnthehero/taskboard-api:latest`
+- `ghcr.io/finnthehero/taskboard-front:latest`
 
 ## Architecture
 
@@ -60,43 +63,60 @@ flowchart LR
 ## Prerequisites
 
 - `kubectl` configured for your cluster
-- Docker (for building images)
+- An Ingress controller (e.g. ingress-nginx) if you use [`10-ingress.yaml`](10-ingress.yaml)
+- Docker (only when rebuilding and pushing images)
 
-## OrbStack (local)
+## Deploy
 
-1. Enable Kubernetes in OrbStack and verify:
+1. Verify the cluster:
 
    ```bash
    kubectl cluster-info
    ```
 
-2. Build images (OrbStack shares the Docker daemon with Kubernetes):
-
-   ```bash
-   docker build -t taskboard-api:local ../taskboard-api
-   docker build -t taskboard-front:local --build-arg VITE_API_URL=/api ../taskboard-front
-   ```
-
-3. Copy secrets if needed (dev values are already in `01-secrets.yaml`):
+2. Copy secrets if needed (dev values are already in `01-secrets.yaml`):
 
    ```bash
    cp secrets.example.yaml 01-secrets.yaml
    # edit passwords and JWT_SECRET
    ```
 
-4. Apply manifests:
+3. Apply manifests (Deployments pull from GHCR):
 
    ```bash
    kubectl apply -f .
    ```
 
-5. Watch rollout:
+4. Watch rollout:
 
    ```bash
    kubectl get pods -n taskboard -w
    ```
 
-6. Open via Ingress IP (`kubectl get ingress -n taskboard`) or add `127.0.0.1 taskboard.local` to `/etc/hosts`.
+5. Open via Ingress IP (`kubectl get ingress -n taskboard`) or add `127.0.0.1 taskboard.local` to `/etc/hosts`.
+
+After pushing new GHCR builds, restart so nodes re-pull `:latest` (`imagePullPolicy: Always`):
+
+```bash
+kubectl rollout restart deployment/backend deployment/frontend -n taskboard
+```
+
+### Rebuild and push images
+
+When you change the apps, rebuild, retag, and push:
+
+```bash
+docker build -t taskboard-api:local ../taskboard-api
+docker build -t taskboard-front:local --build-arg VITE_API_URL=/api ../taskboard-front
+
+docker tag taskboard-api:local ghcr.io/finnthehero/taskboard-api:latest
+docker tag taskboard-front:local ghcr.io/finnthehero/taskboard-front:latest
+
+docker push ghcr.io/finnthehero/taskboard-api:latest
+docker push ghcr.io/finnthehero/taskboard-front:latest
+```
+
+Packages are public — no `imagePullSecrets` on the Deployments.
 
 ### Debug
 
@@ -108,24 +128,11 @@ kubectl logs -f deployment/postgres -n taskboard
 kubectl get ingress -n taskboard
 ```
 
-## Any Kubernetes cluster
+## Cluster notes
 
-Same manifests work on a standard Kubernetes cluster (kind, minikube, cloud, etc.). Differences from local OrbStack:
+1. **Ingress** — ensure an Ingress controller is installed. Update the host in `10-ingress.yaml` and `CORS_ORIGIN` in `02-configmap.yaml` to your real hostname or load-balancer URL.
 
-1. **Images** — nodes cannot see images you only built on your laptop. Push to a registry, then point the Deployments at those tags:
-
-   ```bash
-   docker build -t ghcr.io/<your-user>/taskboard-api:latest ../taskboard-api
-   docker build -t ghcr.io/<your-user>/taskboard-front:latest --build-arg VITE_API_URL=/api ../taskboard-front
-   docker push ghcr.io/<your-user>/taskboard-api:latest
-   docker push ghcr.io/<your-user>/taskboard-front:latest
-   ```
-
-   In `06-backend-deployment.yaml` and `08-frontend-deployment.yaml`, set the image names above, `imagePullPolicy: Always`, and add `imagePullSecrets` if the registry is private.
-
-2. **Ingress** — ensure an Ingress controller is installed (e.g. ingress-nginx). Update the host in `10-ingress.yaml` and `CORS_ORIGIN` in `02-configmap.yaml` to your real hostname or load-balancer URL.
-
-3. **Storage** — the PVC uses the cluster default StorageClass. Check what is available:
+2. **Storage** — the PVC uses the cluster default StorageClass. Check what is available:
 
    ```bash
    kubectl get sc
@@ -152,8 +159,8 @@ Same manifests work on a standard Kubernetes cluster (kind, minikube, cloud, etc
 |---------|--------------|
 | Backend exits immediately | Missing or wrong `DATABASE_URL` / `JWT_SECRET` |
 | Frontend loads but API fails (405) | Hit frontend Service directly; use Ingress so `/api` reaches backend |
-| Frontend calls wrong API | Rebuild after changing `VITE_API_URL` (build-time) |
-| `ImagePullBackOff` | Image only exists locally; push to a registry (or load into the cluster) and update Deployment image names |
+| Frontend calls wrong API | Rebuild after changing `VITE_API_URL` (build-time), then push GHCR and restart |
+| `ImagePullBackOff` | Wrong GHCR tag/name, package not public, or network/registry issue |
 | Postgres empty after delete | PVC was deleted; data lives on the PVC |
 
 ## Tear down
