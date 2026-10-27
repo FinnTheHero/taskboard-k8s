@@ -1,3 +1,0 @@
-# Local secrets with real credentials / tokens — do not commit
-01-secrets.yaml
-11-cloudflared-secret.yaml
