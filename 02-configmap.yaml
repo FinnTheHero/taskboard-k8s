@@ -6,7 +6,6 @@ metadata:
 data:
   NODE_ENV: "production"
   PORT: "4000"
-  # Set to your public HTTPS origin when using Cloudflare Tunnel, e.g. https://taskboard.yourdomain.com
-  CORS_ORIGIN: "https://taskboard.yourdomain.com"
+  CORS_ORIGIN: "https://taskboard.codex-reader.org" # Set to your public HTTPS origin
   JWT_EXPIRES_IN: "15m"
   REFRESH_TOKEN_EXPIRES_IN: "7d"
