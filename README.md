@@ -30,7 +30,6 @@ flowchart LR
 
     PVC[("PVC<br/>postgres-data<br/>1Gi")]
     Secret[("Secret<br/>taskboard-secrets")]
-    TunnelSecret[("Secret<br/>cloudflared-tunnel")]
     ConfigMap[("ConfigMap<br/>backend-config")]
   end
 
@@ -46,7 +45,7 @@ flowchart LR
   PostgresPod --> PVC
   Secret -.-> BackendPod
   Secret -.-> PostgresPod
-  TunnelSecret -.-> Tunnel
+  Secret -.-> Tunnel
   ConfigMap -.-> BackendPod
 ```
 
@@ -57,7 +56,7 @@ Services are **ClusterIP** — tunnel (or port-forward) is how you reach them fr
 | File | Kind | Purpose |
 |------|------|---------|
 | `00-namespace.yaml` | Namespace | Isolates resources in `taskboard` |
-| `01-secrets.yaml` | Secret | DB credentials, `DATABASE_URL`, `JWT_SECRET` |
+| `01-secrets.yaml` | Secret | DB credentials, `DATABASE_URL`, `JWT_SECRET`, and `TUNNEL_TOKEN` |
 | `02-configmap.yaml` | ConfigMap | Non-secret backend config (`CORS_ORIGIN`) |
 | `03-postgres-pvc.yaml` | PersistentVolumeClaim | 1Gi disk for Postgres data |
 | `04-postgres-deployment.yaml` | Deployment | Postgres pod with probes + volume |
@@ -68,12 +67,11 @@ Services are **ClusterIP** — tunnel (or port-forward) is how you reach them fr
 | `09-frontend-service.yaml` | Service | Exposes frontend on port 80 |
 | `10-ingress.yaml` | Ingress | Optional; unused when using Cloudflare Tunnel |
 | `11-cloudflared-deployment.yaml` | Deployment | Cloudflare Tunnel connector |
-| `cloudflared-secret.example.yaml` | Secret template | Copy to `11-cloudflared-secret.yaml` with your token |
 
 ## Prerequisites
 
 - `kubectl` configured for your cluster
-- A **StorageClass** (or static PV) so the Postgres PVC can bind — see [Storage](#storage)
+- A `local-path` StorageClass (or a matching change to `03-postgres-pvc.yaml`) so the Postgres PVC can bind — see [Storage](#storage)
 - Docker (only when rebuilding and pushing images)
 - An Ingress controller (e.g. ingress-nginx) **only if** you use [`10-ingress.yaml`](10-ingress.yaml) instead of Cloudflare Tunnel
 - A Cloudflare Tunnel token for public HTTPS access — see [Cloudflare Tunnel](#cloudflare-tunnel)
@@ -93,22 +91,21 @@ kubectl get all -n taskboard
    kubectl get sc
    ```
 
-2. Copy secrets if needed (dev values are already in `01-secrets.yaml`):
+2. Edit `01-secrets.yaml` and replace the placeholder values:
 
    ```bash
-   cp secrets.example.yaml 01-secrets.yaml
-   # edit passwords and JWT_SECRET
+   # edit POSTGRES_PASSWORD, DATABASE_URL, JWT_SECRET, and TUNNEL_TOKEN
    ```
 
-3. If your PVC needs an explicit class, set `storageClassName` in `03-postgres-pvc.yaml` to a name from `kubectl get sc` (or install a provisioner first).
+3. If your cluster does not provide a `local-path` StorageClass, change `storageClassName` in `03-postgres-pvc.yaml` to an available class (or install a provisioner first).
 
-4. Apply manifests (Deployments pull from GHCR). Create the cloudflared Secret **before** applying the tunnel Deployment (or apply everything after the secret exists):
+4. Apply the manifests. The Cloudflare token is read from `taskboard-secrets` by the tunnel Deployment:
 
    ```bash
    kubectl apply -f .
    ```
 
-   If `cloudflared` CrashLoops with a missing secret, follow [Cloudflare Tunnel](#cloudflare-tunnel) first, then `kubectl apply -f 11-cloudflared-deployment.yaml`.
+   If `cloudflared` CrashLoops with an invalid or missing token, update `01-secrets.yaml` and re-apply it before restarting the Deployment.
 
 5. Watch rollout:
 
@@ -149,13 +146,13 @@ kubectl -n taskboard port-forward svc/backend 4000:4000
 curl http://localhost:4000/api/health
 ```
 
-**Frontend UI shell** (static SPA only):
+**Frontend UI and API through nginx:**
 
 ```bash
 kubectl -n taskboard port-forward svc/frontend 8080:80
 ```
 
-Open `http://localhost:8080`. Browser calls to `/api` go to the frontend Service unless something also routes `/api` to the backend (Ingress or a local reverse proxy). For full UI + API on one origin, use Ingress when ready.
+Open `http://localhost:8080`. The frontend nginx proxies `/api` requests to the backend Service, so this provides the UI and API on one origin.
 
 **CORS note:** Set `CORS_ORIGIN` in `02-configmap.yaml` to your browser origin (`https://taskboard.yourdomain.com` for Tunnel, or `http://…` for lab port-forward). Restart the backend after changing it.
 
@@ -172,15 +169,14 @@ Expose TaskBoard on a Cloudflare subdomain (same idea as `cloudflared` on a dock
    - Service URL: `http://frontend:80` (cloudflared runs in namespace `taskboard`)
    - Path: leave as `/` (nginx handles `/api`)
 
-### 2. Secret
+### 2. Configure the token
 
 ```bash
-cp cloudflared-secret.example.yaml 11-cloudflared-secret.yaml
-# paste TUNNEL_TOKEN, then:
-kubectl apply -f 11-cloudflared-secret.yaml
+# edit TUNNEL_TOKEN in 01-secrets.yaml, then:
+kubectl apply -f 01-secrets.yaml
 ```
 
-`11-cloudflared-secret.yaml` is gitignored — do not commit the real token.
+Do not commit real credentials or tunnel tokens.
 
 ### 3. CORS + tunnel Deployment
 
@@ -282,10 +278,9 @@ kubectl get ingress -n taskboard
 | `POSTGRES_DB` | Postgres |
 | `DATABASE_URL` | Backend |
 | `JWT_SECRET` | Backend (min 16 characters) |
-| `TUNNEL_TOKEN` | cloudflared (`cloudflared-tunnel` Secret) |
+| `TUNNEL_TOKEN` | cloudflared (`taskboard-secrets` Secret) |
 
-- `secrets.example.yaml` / `cloudflared-secret.example.yaml` — templates (safe to commit)
-- `01-secrets.yaml` / `11-cloudflared-secret.yaml` — real values; gitignored / do not commit
+- `01-secrets.yaml` — Secret manifest containing all database, JWT, and tunnel credentials; replace placeholders and do not commit real values
 
 ## Common issues
 
@@ -296,10 +291,9 @@ kubectl get ingress -n taskboard
 | Postgres `Pending`, unbound PVC | No StorageClass / no provisioner; see [Storage](#storage) |
 | `ImagePullBackOff` + `no match for platform` | Image built for arm64; rebuild with `--platform linux/amd64` |
 | `ImagePullBackOff` / NotFound | Wrong GHCR tag/name, package not public, or network/registry issue |
-| cloudflared CrashLoop / CreateContainerConfigError | Missing `cloudflared-tunnel` Secret; apply token Secret first |
+| cloudflared CrashLoop / CreateContainerConfigError | Missing or invalid `TUNNEL_TOKEN` in `taskboard-secrets` |
 | Tunnel up but site 502 / bad gateway | Public hostname service URL wrong; use `http://frontend:80` in namespace `taskboard` |
 | Browser CORS errors | `CORS_ORIGIN` must match the exact HTTPS origin (scheme + host); restart backend |
-| Frontend loads but API fails (405) | Hit frontend alone without nginx `/api` proxy path; use tunnel → frontend or Ingress |
 | Frontend calls wrong API | Rebuild after changing `VITE_API_URL` (build-time), then push GHCR and restart |
 | Postgres empty after delete | PVC was deleted; data lives on the PVC |
 
